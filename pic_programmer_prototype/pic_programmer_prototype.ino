@@ -8,9 +8,12 @@
 #define PROGRAMMING_MODE_INPUT_LINE_SET_TIME 1       // Tset0
 #define PROGRAMMING_MODE_HOLD_ACTIVATION_TIME 10     // Thld0
 #define PROGRAMMING_MODE_EXIT_DELAY_TIME 2           // Texit
+#define PROGRAMMING_MODE_PROGRAMMING_TIME 10000      // Tprog
+#define PROGRAMMING_MODE_PROGRAMMING_END_TIME 1000   // Tdis
 
 #define PROGRAMMING_MODE_CLOCK_CYCLE_DELAY 1         // Tset1, Thld1
-#define PROGRAMMING_MODE_COMMAND_DELAY 2             // max(Tdly1, Tdly2, Tdly3)
+#define PROGRAMMING_MODE_COMMAND_DELAY 5             // max(Tdly1, Tdly2, Tdly3)
+
 
 const int POWER_PIN = 40;
 const int PROG_POWER_PIN = 41;
@@ -47,6 +50,7 @@ class PICProgrammer {
       for (int i = 0; i < 6; i++) {
         digitalWrite(PROGRAMMING_CLOCK_PIN, HIGH);
         digitalWrite(PROGRAMMING_DATA_PIN, (cmd & 1) == 1 ? HIGH : LOW);
+        //Serial.print("Writing: "); Serial.println((cmd & 1) == 1 ? HIGH : LOW);
         
         delayMicroseconds(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
         digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
@@ -148,7 +152,7 @@ class PICProgrammer {
         for (int i = 0; i < 16; i++) {
           digitalWrite(PROGRAMMING_CLOCK_PIN, HIGH);
           delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
-          result = (result << 1) | ((bool) digitalRead(PROGRAMMING_DATA_PIN)) ? 1 : 0;
+          result = (result >> 1) & 0x7FFF | (((bool) digitalRead(PROGRAMMING_DATA_PIN)) ? 0x8000 : 0);
           digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
           delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
         }
@@ -160,11 +164,44 @@ class PICProgrammer {
       return -1;
     }
 
+    bool writeWord(int w) {
+      w = (w & 0x3F) << 1;
+      
+      if (_inProgrammingMode) {
+        writeCommand(0x02);
+        delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
+
+        for (int i = 0; i < 16; i++) {
+          digitalWrite(PROGRAMMING_CLOCK_PIN, HIGH);
+          digitalWrite(PROGRAMMING_DATA_PIN, (w & 1) == 1 ? HIGH : LOW);
+          Serial.print("Writing: "); Serial.println((w & 1) == 1 ? HIGH : LOW);
+          delayMicroseconds(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
+          digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
+          delayMicroseconds(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
+        }
+        
+        digitalWrite(PROGRAMMING_DATA_PIN, LOW);
+        return true;
+      }
+      return false;
+    }
+
     bool incAddress() {
       if (_inProgrammingMode) {
         writeCommand(0x06);
         delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
         location++;
+        return true;
+      }
+      return false;
+    }
+
+    bool burnProgram() {
+      if (_inProgrammingMode) {
+        writeCommand(0x08);
+        delayMicroseconds(PROGRAMMING_MODE_PROGRAMMING_TIME);
+        writeCommand(0x0E);
+        delayMicroseconds(PROGRAMMING_MODE_PROGRAMMING_END_TIME);
         return true;
       }
       return false;
@@ -282,8 +319,7 @@ class ReadTextWordControl : public Command {
           Serial.print(String(programmer->getLocation(), HEX));
           Serial.print(": ");
           for (int i = 0; i < 16; i++) {
-            Serial.print((w & 1) == 1 ? "1 " : "0 ");
-            w >>= 1;
+            Serial.print(((w >> (15 - i)) & 1) == 1 ? "1 " : "0 ");
           }
           Serial.println();
           
@@ -297,6 +333,37 @@ class ReadTextWordControl : public Command {
     
     virtual void printHelpString() const {
       Serial.println("  text_read [count]     reads a word from the current memory location and displayes it as text");
+    }
+};
+
+class WriteTextWordControl : public Command {
+  public:
+    virtual bool match(const String& name) const {
+      return name.startsWith("text_write");
+    }
+    
+    virtual void execute(const String& commandString) {
+      if (!programmer->inProgrammingMode()) {
+        Serial.println("ERROR: Programmer not in programming mode");
+      } else {
+        StringSplitter splitter(commandString, ' ', 2);
+        if (splitter.getItemCount() < 2) {
+          Serial.println("ERROR: Expected word to write as first argument");
+        }
+        String parameter = splitter.getItemAtIndex(1);
+        parameter.toLowerCase();
+        int data = hexToInt(parameter);
+
+        if (data < 0 || data > 0x3F) {
+          Serial.println("ERROR: Word must be >= 0 and <= 3F");
+        } else {
+          programmer->writeWord(data);
+        }
+      }
+    }
+    
+    virtual void printHelpString() const {
+      Serial.println("  text_write hex_value  writes a word to the current memory location");
     }
 };
 
@@ -319,6 +386,26 @@ class IncAddressControl : public Command {
     }
 };
 
+class BurnProgramControl : public Command {
+  public:
+    virtual bool match(const String& name) const {
+      return name.startsWith("burn_prog");
+    }
+    
+    virtual void execute(const String& commandString) {
+      if (!programmer->inProgrammingMode()) {
+        Serial.println("ERROR: Programmer not in programming mode");
+      } else {
+        programmer->burnProgram();
+      }
+    }
+    
+    virtual void printHelpString() const {
+      Serial.println("  burn_prog             burn the program into program memory");
+    }
+};
+
+
 void setup() {
   memset(&commands, COMMANDS_SIZE * sizeof(commands[0]), 0);
   commands[0] = new HelpCommand();
@@ -326,6 +413,8 @@ void setup() {
   commands[2] = new ProgrammingModeControl();
   commands[3] = new IncAddressControl();
   commands[4] = new ReadTextWordControl();
+  commands[5] = new WriteTextWordControl();
+  commands[6] = new BurnProgramControl();
   
   Serial.begin(57600);
   Serial.setTimeout(10);
