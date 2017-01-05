@@ -8,12 +8,24 @@
 #define PROGRAMMING_MODE_INPUT_LINE_SET_TIME 1       // Tset0
 #define PROGRAMMING_MODE_HOLD_ACTIVATION_TIME 10     // Thld0
 #define PROGRAMMING_MODE_EXIT_DELAY_TIME 2           // Texit
-#define PROGRAMMING_MODE_PROGRAMMING_TIME 10000      // Tprog
-#define PROGRAMMING_MODE_PROGRAMMING_END_TIME 1000   // Tdis
+#define PROGRAMMING_MODE_PROGRAMMING_TIME 10000 * 10      // Tprog
+#define PROGRAMMING_MODE_PROGRAMMING_END_TIME 1000 * 10   // Tdis
+#define PROGRAMMING_MODE_ERASE_TIME 20000 * 10            // Tera
 
 #define PROGRAMMING_MODE_CLOCK_CYCLE_DELAY 1         // Tset1, Thld1
 #define PROGRAMMING_MODE_COMMAND_DELAY 5             // max(Tdly1, Tdly2, Tdly3)
 
+
+void ___customDelay(int x) {
+  x = 250;
+  //if (x < 0 || x > 1000) {
+  //  x = 1000;
+  //}
+  delay(x);
+}
+
+//#define micDelay(x) ___customDelay(x)
+#define micDelay(x) delayMicroseconds(x)
 
 const int POWER_PIN = 40;
 const int PROG_POWER_PIN = 41;
@@ -46,18 +58,20 @@ class PICProgrammer {
   
     bool _hasPower, _inProgrammingMode;
 
-    void writeCommand(unsigned char cmd) {
-      for (int i = 0; i < 6; i++) {
+    void pushOutBits(int value, int count) {
+      for (int i = 0; i < count; i++) {
         digitalWrite(PROGRAMMING_CLOCK_PIN, HIGH);
-        digitalWrite(PROGRAMMING_DATA_PIN, (cmd & 1) == 1 ? HIGH : LOW);
-        //Serial.print("Writing: "); Serial.println((cmd & 1) == 1 ? HIGH : LOW);
-        
-        delayMicroseconds(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
+        micDelay(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
+        digitalWrite(PROGRAMMING_DATA_PIN, (value & 1) == 1 ? HIGH : LOW);
+        micDelay(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
         digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
-        delayMicroseconds(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
-
-        cmd >>= 1;
+        micDelay(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
+        value = (value >> 1) & 0x7FFF;
       }
+    }
+
+    void writeCommand(unsigned char cmd) {
+      pushOutBits(cmd, 6);
     }
   public:
     PICProgrammer() {
@@ -95,7 +109,7 @@ class PICProgrammer {
       if (on != _hasPower) {
         digitalWrite(POWER_PIN, on ? HIGH : LOW);
         _hasPower = on;
-        delayMicroseconds(PROGRAMMING_MODE_RESET_DELAY);
+        micDelay(PROGRAMMING_MODE_RESET_DELAY);
       }
     }
 
@@ -109,14 +123,14 @@ class PICProgrammer {
   
           digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
           digitalWrite(PROGRAMMING_DATA_PIN, LOW);
-          delayMicroseconds(PROGRAMMING_MODE_INPUT_LINE_SET_TIME);
+          micDelay(PROGRAMMING_MODE_INPUT_LINE_SET_TIME);
   
           digitalWrite(PROG_POWER_PIN, HIGH);
-          delayMicroseconds(PROGRAMMING_MODE_VPP_LEAD_TIME);
+          micDelay(PROGRAMMING_MODE_VPP_LEAD_TIME);
           digitalWrite(POWER_PIN, HIGH);
-          delayMicroseconds(PROGRAMMING_MODE_HOLD_ACTIVATION_TIME);
+          micDelay(PROGRAMMING_MODE_HOLD_ACTIVATION_TIME);
 
-          location = 0;
+          location = -1;
           _inProgrammingMode = true;
           _hasPower = true;
         } else {
@@ -126,11 +140,11 @@ class PICProgrammer {
   
           digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
           digitalWrite(PROGRAMMING_DATA_PIN, LOW);
-          delayMicroseconds(PROGRAMMING_MODE_EXIT_DELAY_TIME);
+          micDelay(PROGRAMMING_MODE_EXIT_DELAY_TIME);
           
           digitalWrite(PROG_POWER_PIN, LOW);
           
-          delayMicroseconds(PROGRAMMING_MODE_RESET_DELAY);
+          micDelay(PROGRAMMING_MODE_RESET_DELAY);
           
           pinMode(PROGRAMMING_CLOCK_PIN, INPUT);
           pinMode(PROGRAMMING_DATA_PIN, INPUT);
@@ -141,44 +155,41 @@ class PICProgrammer {
       }
     }
 
-    int readWord() {
+    int readWord(bool includeStartStopBits=false) {
       if (_inProgrammingMode) {
         writeCommand(0x04);
 
         pinMode(PROGRAMMING_DATA_PIN, INPUT);
-        delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
+        micDelay(PROGRAMMING_MODE_COMMAND_DELAY);
 
         int result = 0;
         for (int i = 0; i < 16; i++) {
           digitalWrite(PROGRAMMING_CLOCK_PIN, HIGH);
-          delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
+          micDelay(PROGRAMMING_MODE_COMMAND_DELAY);
           result = (result >> 1) & 0x7FFF | (((bool) digitalRead(PROGRAMMING_DATA_PIN)) ? 0x8000 : 0);
           digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
-          delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
+          micDelay(PROGRAMMING_MODE_COMMAND_DELAY);
         }
 
         pinMode(PROGRAMMING_DATA_PIN, OUTPUT);
-        
-        return result;
+
+        if (includeStartStopBits) {
+          return result;
+        } else {
+          return (result >> 1) & 0x3FFF;
+        }
       }
       return -1;
     }
 
     bool writeWord(int w) {
-      w = (w & 0x3F) << 1;
+      w = (w & 0xFFF) << 1;
       
       if (_inProgrammingMode) {
         writeCommand(0x02);
-        delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
+        micDelay(PROGRAMMING_MODE_COMMAND_DELAY);
 
-        for (int i = 0; i < 16; i++) {
-          digitalWrite(PROGRAMMING_CLOCK_PIN, HIGH);
-          digitalWrite(PROGRAMMING_DATA_PIN, (w & 1) == 1 ? HIGH : LOW);
-          Serial.print("Writing: "); Serial.println((w & 1) == 1 ? HIGH : LOW);
-          delayMicroseconds(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
-          digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
-          delayMicroseconds(PROGRAMMING_MODE_CLOCK_CYCLE_DELAY);
-        }
+        pushOutBits(w, 16);
         
         digitalWrite(PROGRAMMING_DATA_PIN, LOW);
         return true;
@@ -189,7 +200,7 @@ class PICProgrammer {
     bool incAddress() {
       if (_inProgrammingMode) {
         writeCommand(0x06);
-        delayMicroseconds(PROGRAMMING_MODE_COMMAND_DELAY);
+        micDelay(PROGRAMMING_MODE_COMMAND_DELAY);
         location++;
         return true;
       }
@@ -199,9 +210,18 @@ class PICProgrammer {
     bool burnProgram() {
       if (_inProgrammingMode) {
         writeCommand(0x08);
-        delayMicroseconds(PROGRAMMING_MODE_PROGRAMMING_TIME);
+        micDelay(PROGRAMMING_MODE_PROGRAMMING_TIME);
         writeCommand(0x0E);
-        delayMicroseconds(PROGRAMMING_MODE_PROGRAMMING_END_TIME);
+        micDelay(PROGRAMMING_MODE_PROGRAMMING_END_TIME);
+        return true;
+      }
+      return false;
+    }
+    
+    bool erase() {
+      if (_inProgrammingMode) {
+        writeCommand(0x09);
+        micDelay(PROGRAMMING_MODE_ERASE_TIME);
         return true;
       }
       return false;
@@ -282,8 +302,10 @@ class ProgrammingModeControl : public Command {
 
       if (parameter == "on") {
         programmer->setProgrammingMode(true);
+        Serial.println("Programming mode on");
       } else if (parameter == "off") {
         programmer->setProgrammingMode(false);
+        Serial.println("Programming mode off");
       } else {
         Serial.println("ERROR: on/off required");
       }
@@ -297,7 +319,7 @@ class ProgrammingModeControl : public Command {
 class ReadTextWordControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("text_read");
+      return name.startsWith("read");
     }
     
     virtual void execute(const String& commandString) {
@@ -306,15 +328,15 @@ class ReadTextWordControl : public Command {
       } else {
         StringSplitter splitter(commandString, ' ', 2);
 
-        int count = 1;
+        int count = 0;
         if (splitter.getItemCount() > 1) {
           String parameter = splitter.getItemAtIndex(1);
           parameter.toLowerCase();
           count = hexToInt(parameter);
         }
 
-        while (count > 0) {
-          int w = programmer->readWord();
+        do {
+          int w = programmer->readWord(true);
           Serial.print("Word ");
           Serial.print(String(programmer->getLocation(), HEX));
           Serial.print(": ");
@@ -324,22 +346,22 @@ class ReadTextWordControl : public Command {
           Serial.println();
           
           count--;
-          if (count > 0) {
+          if (count >= 0) {
             programmer->incAddress();
           }
-        }
+        } while (count > 0);
       }
     }
     
     virtual void printHelpString() const {
-      Serial.println("  text_read [count]     reads a word from the current memory location and displayes it as text");
+      Serial.println("  read [count]          reads a word from the current memory location and displayes it as text");
     }
 };
 
 class WriteTextWordControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("text_write");
+      return name.startsWith("write");
     }
     
     virtual void execute(const String& commandString) {
@@ -354,8 +376,8 @@ class WriteTextWordControl : public Command {
         parameter.toLowerCase();
         int data = hexToInt(parameter);
 
-        if (data < 0 || data > 0x3F) {
-          Serial.println("ERROR: Word must be >= 0 and <= 3F");
+        if (data < 0 || data > 0xFFF) {
+          Serial.println("ERROR: Word must be >= 0 and <= FFF");
         } else {
           programmer->writeWord(data);
         }
@@ -363,7 +385,7 @@ class WriteTextWordControl : public Command {
     }
     
     virtual void printHelpString() const {
-      Serial.println("  text_write hex_value  writes a word to the current memory location");
+      Serial.println("  write hex_value       writes a word to the current memory location");
     }
 };
 
@@ -377,19 +399,40 @@ class IncAddressControl : public Command {
       if (!programmer->inProgrammingMode()) {
         Serial.println("ERROR: Programmer not in programming mode");
       } else {
-        programmer->incAddress();
+        StringSplitter splitter(commandString, ' ', 2);
+        const bool numberGiven = splitter.getItemCount() > 1;
+        
+        int count = 1;
+        if (numberGiven) {
+          String parameter = splitter.getItemAtIndex(1);
+          parameter.toLowerCase();
+          count = hexToInt(parameter);
+          if (count < 0) {
+            Serial.println("ERROR: Invalid increment (must be positive!)");
+          }
+        }
+
+        while (count > 0) {
+          programmer->incAddress();
+          count--;
+        }
+
+        if (numberGiven) {
+          Serial.print("New address: ");
+          Serial.println(String(programmer->getLocation(), HEX));
+        }
       }
     }
     
     virtual void printHelpString() const {
-      Serial.println("  inc                   increment write/read address");
+      Serial.println("  inc [number]          increment write/read by number of addresses (default is 1)");
     }
 };
 
 class BurnProgramControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("burn_prog");
+      return name.startsWith("burn");
     }
     
     virtual void execute(const String& commandString) {
@@ -401,7 +444,76 @@ class BurnProgramControl : public Command {
     }
     
     virtual void printHelpString() const {
-      Serial.println("  burn_prog             burn the program into program memory");
+      Serial.println("  burn                  burn the program into program memory");
+    }
+};
+
+class EraseControl : public Command {
+  public:
+    virtual bool match(const String& name) const {
+      return name.startsWith("erase");
+    }
+    
+    virtual void execute(const String& commandString) {
+      if (!programmer->inProgrammingMode()) {
+        Serial.println("ERROR: Programmer not in programming mode");
+      } else {
+        programmer->erase();
+      }
+    }
+    
+    virtual void printHelpString() const {
+      Serial.println("  erase                 erases the program memory (mode depends on current PC location)");
+    }
+};
+
+
+
+class RewriteChipCommand : public Command {
+  public:
+    virtual bool match(const String& name) const {
+      return name.startsWith("rewrite");
+    }
+    
+    virtual void execute(const String& commandString) {
+      if (!programmer->inProgrammingMode()) {
+        Serial.println("ERROR: Programmer not in programming mode");
+      } else {
+        StringSplitter splitter(commandString, ' ', 2);
+
+        int count = 0;
+        if (splitter.getItemCount() <= 1) {
+          Serial.println("ERROR: Expected number of locations to rewrite");
+        } else {
+          String parameter = splitter.getItemAtIndex(1);
+          parameter.toLowerCase();
+          count = hexToInt(parameter);
+
+          int oldProgress = 0;
+          int newProgress = 0;
+          int i = 0;
+          while (i < count) {
+            newProgress = 10 * i / (count - 1);
+            if (newProgress != oldProgress) {
+              oldProgress = newProgress;
+              Serial.print(newProgress);
+              Serial.print("0% ...");
+            }
+            
+            int w = programmer->readWord();
+            programmer->writeWord(w);
+            programmer->burnProgram();
+            
+            programmer->incAddress();
+            i++;
+          }
+          Serial.println("done");
+        }
+      }
+    }
+    
+    virtual void printHelpString() const {
+      Serial.println("  rewrite number        reads and rewrites the the given number of addresses");
     }
 };
 
@@ -415,6 +527,8 @@ void setup() {
   commands[4] = new ReadTextWordControl();
   commands[5] = new WriteTextWordControl();
   commands[6] = new BurnProgramControl();
+  commands[7] = new EraseControl();
+  commands[8] = new RewriteChipCommand();
   
   Serial.begin(57600);
   Serial.setTimeout(10);
