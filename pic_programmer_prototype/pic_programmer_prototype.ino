@@ -8,9 +8,9 @@
 #define PROGRAMMING_MODE_INPUT_LINE_SET_TIME 1       // Tset0
 #define PROGRAMMING_MODE_HOLD_ACTIVATION_TIME 10     // Thld0
 #define PROGRAMMING_MODE_EXIT_DELAY_TIME 2           // Texit
-#define PROGRAMMING_MODE_PROGRAMMING_TIME 10000 * 10      // Tprog
-#define PROGRAMMING_MODE_PROGRAMMING_END_TIME 1000 * 10   // Tdis
-#define PROGRAMMING_MODE_ERASE_TIME 20000 * 10            // Tera
+#define PROGRAMMING_MODE_PROGRAMMING_TIME 10000      // Tprog
+#define PROGRAMMING_MODE_PROGRAMMING_END_TIME 1000   // Tdis
+#define PROGRAMMING_MODE_ERASE_TIME 20000            // Tera
 
 #define PROGRAMMING_MODE_CLOCK_CYCLE_DELAY 1         // Tset1, Thld1
 #define PROGRAMMING_MODE_COMMAND_DELAY 5             // max(Tdly1, Tdly2, Tdly3)
@@ -134,12 +134,11 @@ class PICProgrammer {
           _inProgrammingMode = true;
           _hasPower = true;
         } else {
-          digitalWrite(POWER_PIN, LOW);
-
           pinMode(PROGRAMMING_DATA_PIN, OUTPUT);
   
-          digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
           digitalWrite(PROGRAMMING_DATA_PIN, LOW);
+          digitalWrite(PROGRAMMING_CLOCK_PIN, LOW);
+          digitalWrite(POWER_PIN, LOW);
           micDelay(PROGRAMMING_MODE_EXIT_DELAY_TIME);
           
           digitalWrite(PROG_POWER_PIN, LOW);
