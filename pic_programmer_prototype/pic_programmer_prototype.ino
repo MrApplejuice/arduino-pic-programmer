@@ -37,7 +37,7 @@ class Command {
     virtual void printHelpString() const;
 };
 
-const size_t COMMANDS_SIZE = 10;
+const size_t COMMANDS_SIZE = 16;
 Command::Ptr commands[COMMANDS_SIZE];
 
 class HelpCommand : public Command {
@@ -64,7 +64,7 @@ class HelpCommand : public Command {
 class PowerControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("power");
+      return name == "power";
     }
     
     virtual void execute(const String& commandString) {
@@ -89,7 +89,7 @@ class PowerControl : public Command {
 class ProgrammingModeControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("prog_mode");
+      return name == "prog_mode";
     }
     
     virtual void execute(const String& commandString) {
@@ -113,12 +113,14 @@ class ProgrammingModeControl : public Command {
     }
 };
 
-class ReadTextWordControl : public Command {
+class ReadWordControlBase : public Command {
+  private:
+    bool readStopBits;
+  protected:
+    virtual void printWord(long location, int w) = 0;
+
+    ReadWordControlBase(bool rsb) : readStopBits(rsb) {}
   public:
-    virtual bool match(const String& name) const {
-      return name.startsWith("read");
-    }
-    
     virtual void execute(const String& commandString) {
       if (!programmer->inProgrammingMode()) {
         Serial.println("ERROR: Programmer not in programming mode");
@@ -133,14 +135,8 @@ class ReadTextWordControl : public Command {
         }
 
         do {
-          int w = programmer->readWord(true);
-          Serial.print("Word ");
-          Serial.print(String(programmer->getLocation(), HEX));
-          Serial.print(": ");
-          for (int i = 0; i < 16; i++) {
-            Serial.print(((w >> (15 - i)) & 1) == 1 ? "1 " : "0 ");
-          }
-          Serial.println();
+          const int w = programmer->readWord(readStopBits);
+          printWord(programmer->getLocation(), w);
           
           count--;
           if (count >= 0) {
@@ -149,16 +145,71 @@ class ReadTextWordControl : public Command {
         } while (count > 0);
       }
     }
+};
+
+class ReadTextWordControl : public ReadWordControlBase {
+  protected:
+    virtual void printWord(long location, int w) {
+      Serial.print("Word ");
+      Serial.print(String(programmer->getLocation(), HEX));
+      Serial.print(": ");
+      for (int i = 0; i < 16; i++) {
+        Serial.print(((w >> (15 - i)) & 1) == 1 ? "1 " : "0 ");
+      }
+      Serial.println();
+    }
+  public:
+    ReadTextWordControl() : ReadWordControlBase(true) {}
+  
+    virtual bool match(const String& name) const {
+      return name == "read";
+    }
     
     virtual void printHelpString() const {
       Serial.println("  read [count]          reads a word from the current memory location and displayes it as text");
     }
 };
 
+class ReadHexWordControl : public ReadWordControlBase {
+  private:
+    int num;
+  protected:
+    virtual void printWord(long location, int w) {
+      if (num == 0) {
+        Serial.print(String(programmer->getLocation(), HEX));
+        Serial.print(": ");
+      }
+      Serial.print(String(w, HEX) + " ");
+      num++;
+      if (num % 0x10 == 0) {
+        Serial.println();
+        num = 0;
+      }
+    }
+  public:
+    ReadHexWordControl() : ReadWordControlBase(false) {}
+  
+    virtual void execute(const String& commandString) {
+      num = 0;
+      ReadWordControlBase::execute(commandString);
+      if (num != 0) {
+        Serial.println();
+      }
+    }
+    
+    virtual bool match(const String& name) const {
+      return name == "read_hex";
+    }
+    
+    virtual void printHelpString() const {
+      Serial.println("  read_hex [count]      reads a word from the current memory location and displayes it as hex string");
+    }
+};
+
 class WriteTextWordControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("write");
+      return name == "write";
     }
     
     virtual void execute(const String& commandString) {
@@ -189,7 +240,7 @@ class WriteTextWordControl : public Command {
 class IncAddressControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("inc");
+      return name == "inc";
     }
     
     virtual void execute(const String& commandString) {
@@ -229,26 +280,40 @@ class IncAddressControl : public Command {
 class BurnProgramControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("burn");
+      return name == "burn";
     }
     
     virtual void execute(const String& commandString) {
       if (!programmer->inProgrammingMode()) {
         Serial.println("ERROR: Programmer not in programming mode");
       } else {
+        StringSplitter splitter(commandString, ' ', 2);
+        const bool numberGiven = splitter.getItemCount() > 1;
+        if (numberGiven) {
+          String parameter = splitter.getItemAtIndex(1);
+          parameter.toLowerCase();
+          const int value = hexToInt(parameter);
+          if (value < 0) {
+            Serial.println("ERROR: Invalid value. Value must be positive >= 0 and <= 3FFF");
+          }
+          programmer->writeWord(value);
+        }
+        
         programmer->burn();
       }
     }
     
     virtual void printHelpString() const {
-      Serial.println("  burn                  burn the program into program memory");
+      Serial.println("  burn [hex-number]     Burns the currently written value into program memory. If");
+      Serial.println("                        hex-number is given, it will write that value into program");
+      Serial.println("                        memory before writing to flash memory.");
     }
 };
 
 class EraseControl : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("erase");
+      return name == "erase";
     }
     
     virtual void execute(const String& commandString) {
@@ -269,7 +334,7 @@ class EraseControl : public Command {
 class RewriteChipCommand : public Command {
   public:
     virtual bool match(const String& name) const {
-      return name.startsWith("rewrite");
+      return name == "rewrite";
     }
     
     virtual void execute(const String& commandString) {
@@ -317,15 +382,18 @@ class RewriteChipCommand : public Command {
 
 void setup() {
   memset(&commands, COMMANDS_SIZE * sizeof(commands[0]), 0);
-  commands[0] = new HelpCommand();
-  commands[1] = new PowerControl();
-  commands[2] = new ProgrammingModeControl();
-  commands[3] = new IncAddressControl();
-  commands[4] = new ReadTextWordControl();
-  commands[5] = new WriteTextWordControl();
-  commands[6] = new BurnProgramControl();
-  commands[7] = new EraseControl();
-  commands[8] = new RewriteChipCommand();
+
+  int i = 0;
+  commands[i++] = new HelpCommand();
+  commands[i++] = new PowerControl();
+  commands[i++] = new ProgrammingModeControl();
+  commands[i++] = new IncAddressControl();
+  commands[i++] = new ReadTextWordControl();
+  commands[i++] = new ReadHexWordControl();
+  commands[i++] = new WriteTextWordControl();
+  commands[i++] = new BurnProgramControl();
+  commands[i++] = new EraseControl();
+  commands[i++] = new RewriteChipCommand();
   
   Serial.begin(57600);
   Serial.setTimeout(10);
@@ -334,16 +402,22 @@ void setup() {
 }
 
 void loop() {
-  String cmd = Serial.readStringUntil('\n');
-  cmd.trim();
-  if (cmd.length() > 0) {
+  String cmdline = Serial.readStringUntil('\n');
+  cmdline.trim();
+  if (cmdline.length() > 0) {
+    String cmd;
+    {
+      StringSplitter splitter(cmdline, ' ', 2);
+      cmd = splitter.getItemAtIndex(0);
+    }
+
     bool cmatched = false;
     for (int i = 0; i < COMMANDS_SIZE; i++) {
       if (commands[i] == nullptr) {
         break;
       }
       if (commands[i]->match(cmd)) {
-        commands[i]->execute(cmd);
+        commands[i]->execute(cmdline);
         cmatched = true;
         break;
       }
