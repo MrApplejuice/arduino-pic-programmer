@@ -3,17 +3,65 @@
 import sys
 import argparse
 
-def mplab_to_hex(data):
-    return data
+def mplab_to_words(text):
+    current_address = 0
+    result = []
 
-def hex_to_mplab(data):
-    return data
-    
-def bin_to_hex(data):
-    return data
+    for num, raw_line in enumerate(text.split("\n")):
+        try:
+            line = raw_line.strip()
+            if line.startswith(":"):
+                line = line[1:].replace(" ", "")
+                if len(line) % 2 != 0:
+                    raise ValueError("line does not contain bytes")
+                if len(line) < 2 + 4 + 2 + 2: # bytes, address, type, checksum
+                    raise ValueError("valid lines must contain at least 5 bytes")
+                
+                check_sum = 0
+                for i in range(0, len(line), 2):
+                    check_sum = (check_sum + int(line[i:i+2], base=16)) % 0x100
+                if check_sum != 0:
+                    raise ValueError("invalid checksum")
+                
+                nbytes_str = line[0:2]
+                address_str = line[2:6]
+                type_str = line[6:8]
+                trailing_str = line[8:]
+                
+                nbytes = int(nbytes_str, base=16)
+                address = int(address_str, base=16)
+                current_address = (current_address // 0x10000 * 0x10000) | address
+                
+                if len(trailing_str) != nbytes * 2 + 2:
+                    raise ValueError("invalid number of bytes in line")
+                    
+                if type_str == "00":
+                    new_words = [int(trailing_str[i+2:i+4] + trailing_str[i:i+2], base=16)
+                                 for i in range(0, len(trailing_str) - 2, 4)]
+                    
+                    if len(result) < current_address + len(new_words):
+                        result += [0xFFFF] * (current_address + len(new_words) - len(result))
+                    result = result[:current_address] + new_words + result[current_address+len(new_words):]
+                elif type_str == "01":
+                    break
+                elif type_str == "04":
+                    current_address = current_address & 0xFFFF + 0x10000 * int(trailing_str[:-2], base=16)
+                else:
+                    raise ValueError("Non-supported mplab-hex value: {}".format(type_str))
+        except ValueError as e:
+            raise ValueError("Invalid line {}: {}\n    {}".format(num + 1, str(e), raw_line)) from e
+    return result
 
-def hex_to_bin(data):
-    return data
+def words_to_hex(data):
+    result = ""
+
+    spacing = 16
+
+    for address in range(0, len(data), spacing):
+        result += hex(address) + ": "
+        result += " ".join(format(v, 'x') for v in data[address:address + spacing])
+        result += "\n"
+    return result
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -21,7 +69,7 @@ if __name__ == "__main__":
                     'around. All files are converted and written to stdout.')
     
     parser.add_argument('filename', 
-                        type=str, 
+                        type=argparse.FileType('r'), 
                         nargs="*", 
                         help='the file(s) that should be converted. If none is defined, data is read from stdin')
     
@@ -57,25 +105,30 @@ if __name__ == "__main__":
                                  default=False,
                                  help='convert the file from binary to mplab hex representation')
 
-    parsed_args = parser.parse_args(sys.argv)
+    parsed_args = parser.parse_args(sys.argv[1:])
     
     input_files = (sys.stdin,)
+    if parsed_args.filename:
+        input_files = list(parsed_args.filename)
     
+    result = ""
     for input_file in input_files:
         data = input_file.read()
-        
+    
+            
         if parsed_args.bin_to_hex:
-            print(bin_to_hex(parsed_args))
+            result += bin_to_hex(data)
         elif parsed_args.hex_to_bin:
-            print(bin_to_hex(parsed_args))
+            result += bin_to_hex(data)
         elif parsed_args.hex_to_mplab:
-            print(hex_to_mplab(parsed_args))
+            result += hex_to_mplab(data)
         elif parsed_args.mplab_to_hex:
-            print(mplab_to_hex(parsed_args))
+            result += words_to_hex(mplab_to_words(data))
         elif parsed_args.bin_to_mplab:
-            print(hex_to_mplab(bin_to_hex(parsed_args)))
+            result += hex_to_mplab(bin_to_hex(data))
         elif parsed_args.mplab_to_bin:
-            print(hex_to_bin(mplab_to_hex(parsed_args)))
+            result += hex_to_bin(mplab_to_hex(data))
         else:
             raise ValueError("Invalid set of arguments supplied")
     
+    print(result, end="")
