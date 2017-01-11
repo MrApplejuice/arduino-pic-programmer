@@ -31,17 +31,22 @@ def mplab_to_words(text):
                 nbytes = int(nbytes_str, base=16)
                 address = int(address_str, base=16)
                 current_address = (current_address // 0x10000 * 0x10000) | address
-                
+
+                if current_address % 2 == 1:
+                    raise ValueError("current address not word-aligned: {0:04x}".format(current_address))
                 if len(trailing_str) != nbytes * 2 + 2:
                     raise ValueError("invalid number of bytes in line")
-                    
+                if nbytes % 2 != 0:
+                    raise ValueError("byte string does not describe words")
+                
                 if type_str == "00":
                     new_words = [int(trailing_str[i+2:i+4] + trailing_str[i:i+2], base=16)
                                  for i in range(0, len(trailing_str) - 2, 4)]
                     
-                    if len(result) < current_address + len(new_words):
-                        result += [0xFFFF] * (current_address + len(new_words) - len(result))
-                    result = result[:current_address] + new_words + result[current_address+len(new_words):]
+                    current_word_address = current_address // 2
+                    if len(result) < current_word_address + len(new_words):
+                        result += [0xFFFF] * (current_word_address + len(new_words) - len(result))
+                    result = result[:current_word_address] + new_words + result[current_word_address+len(new_words):]
                 elif type_str == "01":
                     break
                 elif type_str == "04":
@@ -58,8 +63,8 @@ def words_to_hex(data):
     spacing = 16
 
     for address in range(0, len(data), spacing):
-        result += hex(address) + ": "
-        result += " ".join(format(v, 'x') for v in data[address:address + spacing])
+        result += format(address, '04x') + ": "
+        result += " ".join(format(v, '04x') for v in data[address:address + spacing])
         result += "\n"
     return result
 
