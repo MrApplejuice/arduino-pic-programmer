@@ -2,6 +2,7 @@
 
 import sys
 import argparse
+import re
 
 def mplab_to_words(text):
     current_address = 0
@@ -68,6 +69,42 @@ def words_to_hex(data):
         result += "\n"
     return result
 
+def binary_to_words(text):
+    result = []
+    
+    try:
+        for num, raw_line in enumerate(text.split("\n")):
+            line = raw_line.strip().lower()
+            if len(line) > 0:
+                if line.startswith("#"):
+                    continue
+                elif not line.startswith("word "):
+                    raise ValueError('line must start with "word 0000:"')
+                else:
+                    splits = line.split(":", 1)
+                    if len(splits) < 2:
+                        raise ValueError('":" expected')
+                        
+                    address_str, bits_str = splits
+                    if "#" in bits_str:
+                        bits_str = bits_str.split("#", 1)[0]
+                    bits_str = re.sub("[^01]", "", bits_str)
+                    
+                    address = int(address_str[len("word"):].strip(), base=16)
+                    
+                    if len(bits_str) != 16:
+                        raise ValueError("Word must consist of 16 bits")
+                    word = int(bits_str, base=2) >> 1
+                    
+                    if address >= len(result):
+                        result += [0xFFFF] * (address + 1 - len(result))
+                    result[address] = word
+                
+    except ValueError as e:
+        raise ValueError("Invalid line {}: {}\n    {}".format(num + 1, str(e), raw_line)) from e
+        
+    return result
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='Converts a binary dump into a hex dump or the other way'
@@ -122,7 +159,7 @@ if __name__ == "__main__":
     
             
         if parsed_args.bin_to_hex:
-            result += bin_to_hex(data)
+            result += words_to_hex(binary_to_words(data))
         elif parsed_args.hex_to_bin:
             result += bin_to_hex(data)
         elif parsed_args.hex_to_mplab:
