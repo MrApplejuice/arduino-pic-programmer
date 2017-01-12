@@ -2,6 +2,7 @@
 
 import time
 import sys
+import re
 import argparse
 import serial
 
@@ -50,12 +51,52 @@ class PICModel(metaclass=PICModelCollector):
     memory_unwritable_regions = ()
     config_word_at_address = None
     
+    @classmethod
+    def in_unimplemented_zone(cls, address):
+        for start_reg, end_reg in cls.memory_unwritable_regions:
+            if start_reg <= address <= end_reg:
+                return True
+        return False
+    
 class PIC10F206(PICModel):
     voltage = 5
     memory_size = 0x400
-    memory_unwritable_regions = ((0x240, 0x3FE),)
+    memory_unwritable_regions = ((0x240, 0x3FE), # unimplemented zone
+                                 (0x3FF, 0x3FF)) # configuration word is also unimplemented when it comes to the programmer
     config_word_at_address = "last"
 
+
+def wordsFileToWordsList(text):
+    result = []
+    for num, raw_line in enumerate(text.split("\n")):
+        try:
+            line = raw_line.strip()
+            if (len(line) == 0) or line.startswith("#"):
+                pass
+            else:
+                if '#' in line:
+                    line = line.split('#', 1)[0].strip()
+                if ':' not in line:
+                    raise ValueError('Expected value separator for addresss')
+                
+                address_str, values_str = line.split(':', 1)
+                address = int(address_str.strip(), base=16)
+                if address < 0:
+                    raise ValueError("invalid address")
+                
+                values = [int(x, base=16) for x in re.split(r"\s+", values_str.strip())]
+                if not all(0 <= x <= 0xFFFF for x in values):
+                    raise ValueError("values out of bounds (0x0000-0xFFFF)")
+                
+                if len(result) < address:
+                    result = result + [0xFFFF] * (len(result) - address)
+                result = result[:address] + values + result[address+len(values):]
+        except ValueError as e:
+            raise ValueError("Invalid line {}: {}\n    {}".format(num + 1, str(e), raw_line)) from e
+    return result
+
+
+class ProgrammingError(Exception): pass
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -74,11 +115,14 @@ if __name__ == "__main__":
                              'damage your PIC)')
     parser.add_argument('hex_file',
                         type=argparse.FileType('r'), 
-                        nargs=1, 
                         help='the hex-file to use to program the PIC')
 
     parsed_args = parser.parse_args(sys.argv[1:])
     
+    words = wordsFileToWordsList(parsed_args.hex_file.read())
+    if len(words) == 0:
+        print("Nothing to program")
+        sys.exit(1)
     
     serial_port = serial.serial_for_url(parsed_args.serial_url, do_not_open=True)
     serial_port.baudrate = 57600
@@ -99,11 +143,13 @@ if __name__ == "__main__":
             while len(serial_port.read(100)) > 0:
                 pass # eat up all remaining help text
             
-            def issue_command(text):
+            def issue_command(text, expected="OK"):
                 serial_port.write(text.encode("UTF-8"))
-                short_answer = serial_port.read(3)
-                if short_answer == "OK\n".encode("UTF-8"):
-                    return "OK\n"
+                short_answer = serial_port.read(len(expected))
+                if short_answer == expected.encode("UTF-8"):
+                    if serial_port.read(1) == b"\r":
+                        serial_port.read(1) # Munch up a \n as well...
+                    return "OK"
                 if short_answer == "ERR".encode("UTF-8"):
                     error_msg = short_answer
                     last_read = 1
@@ -111,7 +157,7 @@ if __name__ == "__main__":
                         new_data = serial_port.read(1024)
                         error_msg = error_msg + new_data
                         last_read = len(new_data)
-                    raise ValueError("PIC programmer rported error:\n{}".format(error_msg.decode("UTF-8")))
+                    raise ProgrammingError("PIC programmer rported error:\n{}".format(error_msg.decode("UTF-8")))
                 else:
                     answer = short_answer
                     last_read = 1
@@ -122,10 +168,32 @@ if __name__ == "__main__":
                     return answer.decode("UTF-8")
                     
             issue_command("prog_mode on")
+            
             try:
                 issue_command("inc")
+                # Do the "I can read"-hack
                 issue_command("burn 3FFF")
-                print(issue_command("read_hex 400"))
+                
+                issue_command("erase")
+                
+                address = 0
+                progress_value = -1
+                print("Starting programming...", end="")
+                while address < min(pic_model.memory_size, len(words)):
+                    new_progress_value = address * 10 // (min(pic_model.memory_size, len(words)) - 1)
+                    if new_progress_value != progress_value:
+                        progress_value = new_progress_value
+                        print("{}%...".format(progress_value * 10), end="", flush=True)
+                    
+                    if not pic_model.in_unimplemented_zone(address):
+                        issue_command("burn {:04x}".format(words[address]))
+                    issue_command("inc", expected="{:x}".format(address + 1))
+                    address += 1
+                while address < pic_model.memory_size:
+                    issue_command("inc", expected="{:x}".format(address + 1))
+                    address += 1
+                
+                print(issue_command("read_hex {:04x}".format(pic_model.memory_size)))
             finally:
                 issue_command("prog_mode off")
         else:
