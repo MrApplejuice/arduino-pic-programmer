@@ -51,7 +51,7 @@ void PICProgrammer :: writeCommand(unsigned char cmd) {
   pushOutBits(cmd, 6);
 }
 
-PICProgrammer :: PICProgrammer() {
+PICProgrammer :: PICProgrammer(int memory_length) {
   pinMode(PROGRAMMING_CLOCK_PIN, INPUT);
   pinMode(PROGRAMMING_DATA_PIN, INPUT);
 
@@ -62,6 +62,8 @@ PICProgrammer :: PICProgrammer() {
 
   _hasPower = false;
   _inProgrammingMode = false;
+
+  this->memory_length = memory_length;
 
   // Wait for a general reset
   delay(100);
@@ -177,7 +179,7 @@ bool PICProgrammer :: incAddress() {
   if (_inProgrammingMode) {
     writeCommand(0x06);
     micDelay(PROGRAMMING_MODE_COMMAND_DELAY);
-    location++;
+    location = (location + 1) % memory_length;
     return true;
   }
   return false;

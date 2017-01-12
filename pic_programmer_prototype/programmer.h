@@ -1,6 +1,6 @@
 class PICProgrammer {
   private:
-    int location;
+    int location, memory_length;
   
     bool _hasPower, _inProgrammingMode;
 
@@ -8,7 +8,7 @@ class PICProgrammer {
 
     void writeCommand(unsigned char cmd);
   public:
-    PICProgrammer();
+    PICProgrammer(int memory_length);
 
     /**
      * Checks if the PIC is powered up (programming mode or otherwise)

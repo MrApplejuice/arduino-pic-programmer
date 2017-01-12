@@ -74,8 +74,10 @@ class PowerControl : public Command {
 
       if (parameter == "on") {
         programmer->setPower(true);
+        Serial.println("OK");
       } else if (parameter == "off") {
         programmer->setPower(false);
+        Serial.println("OK");
       } else {
         Serial.println("ERROR: on/off required");
       }
@@ -99,10 +101,10 @@ class ProgrammingModeControl : public Command {
 
       if (parameter == "on") {
         programmer->setProgrammingMode(true);
-        Serial.println("Programming mode on");
+        Serial.println("OK");
       } else if (parameter == "off") {
         programmer->setProgrammingMode(false);
-        Serial.println("Programming mode off");
+        Serial.println("OK");
       } else {
         Serial.println("ERROR: on/off required");
       }
@@ -227,7 +229,11 @@ class WriteTextWordControl : public Command {
         if (data < 0 || data > 0x3FFF) {
           Serial.println("ERROR: Word must be >= 0 and <= 3FFF");
         } else {
-          programmer->writeWord(data);
+          if (programmer->writeWord(data)) {
+            Serial.println("OK");
+          } else {
+            Serial.println("ERROR: write failed");
+          }
         }
       }
     }
@@ -265,10 +271,7 @@ class IncAddressControl : public Command {
           count--;
         }
 
-        if (numberGiven) {
-          Serial.print("New address: ");
-          Serial.println(String(programmer->getLocation(), HEX));
-        }
+        Serial.println(String(programmer->getLocation(), HEX));
       }
     }
     
@@ -296,10 +299,17 @@ class BurnProgramControl : public Command {
           if (value < 0) {
             Serial.println("ERROR: Invalid value. Value must be positive >= 0 and <= 3FFF");
           }
-          programmer->writeWord(value);
+          if (!programmer->writeWord(value)) {
+            Serial.println("ERROR: failed to write value");
+            return;
+          }
         }
         
-        programmer->burn();
+        if (programmer->burn()) {
+          Serial.println("OK");
+        } else {
+          Serial.println("ERROR: burn failed");
+        }
       }
     }
     
@@ -320,7 +330,11 @@ class EraseControl : public Command {
       if (!programmer->inProgrammingMode()) {
         Serial.println("ERROR: Programmer not in programming mode");
       } else {
-        programmer->erase();
+        if (programmer->erase()) {
+          Serial.println("OK");
+        } else {
+          Serial.println("ERROR: failed to erase data");
+        }
       }
     }
     
@@ -398,7 +412,7 @@ void setup() {
   Serial.begin(57600);
   Serial.setTimeout(10);
 
-  programmer = new PICProgrammer();
+  programmer = new PICProgrammer(0x400);
 }
 
 void loop() {
