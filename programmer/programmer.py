@@ -22,7 +22,8 @@ class PICModelCollector(type):
                 raise ValueError("PICModel.{} must have one of the values: {}".format(name, tuple(_set)))
                 
         raise_if_not_in_set("voltage", [5])
-        raise_if_not_in_set("config_word_at_address", ["last"])
+        raise_if_not_type("config_word_at_address", int)
+        raise_if_not_type("config_word_mask", int)
 
         raise_if_not_type("memory_size", int)
         if class_to_check.memory_size <= 0:
@@ -50,6 +51,8 @@ class PICModel(metaclass=PICModelCollector):
     memory_size = None
     memory_unwritable_regions = ()
     config_word_at_address = None
+    skip_values = []
+    config_word_mask = None
     
     @classmethod
     def in_unimplemented_zone(cls, address):
@@ -63,7 +66,9 @@ class PIC10F206(PICModel):
     memory_size = 0x400
     memory_unwritable_regions = ((0x240, 0x3FE), # unimplemented zone
                                  (0x3FF, 0x3FF)) # configuration word is also unimplemented when it comes to the programmer
-    config_word_at_address = "last"
+    skip_values = [0xFFFF, 0xFFF]
+    config_word_at_address = -1
+    config_word_mask = 0xFFF
 
 
 def wordsFileToWordsList(text):
@@ -116,6 +121,12 @@ if __name__ == "__main__":
     parser.add_argument('hex_file',
                         type=argparse.FileType('r'), 
                         help='the hex-file to use to program the PIC')
+                        
+    parser.add_argument('--no-configuration-word', 
+                        dest="write_config_word",
+                        action='store_false',
+                        default=True,
+                        help='disable writing of the configuration word')
 
     parsed_args = parser.parse_args(sys.argv[1:])
     
@@ -150,14 +161,14 @@ if __name__ == "__main__":
                     if serial_port.read(1) == b"\r":
                         serial_port.read(1) # Munch up a \n as well...
                     return "OK"
-                if short_answer == "ERR".encode("UTF-8"):
+                elif short_answer[:2] == "ER".encode("UTF-8"):
                     error_msg = short_answer
                     last_read = 1
                     while last_read > 0:
                         new_data = serial_port.read(1024)
                         error_msg = error_msg + new_data
                         last_read = len(new_data)
-                    raise ProgrammingError("PIC programmer rported error:\n{}".format(error_msg.decode("UTF-8")))
+                    raise ProgrammingError("PIC programmer reported error:\n{}".format(error_msg.decode("UTF-8")))
                 else:
                     answer = short_answer
                     last_read = 1
@@ -170,7 +181,28 @@ if __name__ == "__main__":
             issue_command("prog_mode on")
             
             try:
-                issue_command("inc")
+                if parsed_args.write_config_word:
+                    try:
+                        config_word = words[pic_model.config_word_at_address]
+                    except IndexError:
+                        raise ProgrammingError("config word could be found in hex file")
+                        
+                    config_word &= 0xFFF
+                    
+                    print("Writing configuration word {:04x}...".format(config_word))
+                    issue_command("erase")
+                    issue_command("burn {:04x}".format(config_word))
+                    
+                    word_on_chip = issue_command("read_hex 1")
+                    word_on_chip = int(word_on_chip.strip().split(":")[1].strip(), base=16)
+                    if word_on_chip != config_word:
+                        raise ProgrammingError("writing the configuration word failed."
+                                               "Should be {:04x} but was {:04x}".format(
+                                                   config_word, word_on_chip))
+                    print("Config word written successfully and verified")
+                else:
+                    issue_command("inc")
+                
                 # Do the "I can read"-hack
                 issue_command("burn 3FFF")
                 
@@ -185,10 +217,12 @@ if __name__ == "__main__":
                         progress_value = new_progress_value
                         print("{}%...".format(progress_value * 10), end="", flush=True)
                     
-                    if not pic_model.in_unimplemented_zone(address):
-                        issue_command("burn {:04x}".format(words[address]))
+                    if words[address] not in pic_model.skip_values:
+                        if not pic_model.in_unimplemented_zone(address):
+                            issue_command("burn {:04x}".format(words[address]))
                     issue_command("inc", expected="{:x}".format(address + 1))
                     address += 1
+                print("finished!")
                 while address < pic_model.memory_size:
                     issue_command("inc", expected="{:x}".format(address + 1))
                     address += 1
